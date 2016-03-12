@@ -1,6 +1,22 @@
 #!/usr/bin/env ruby
 
 
+class FileReader
+
+  def initialize(filename)
+    @filename = filename
+  end
+
+  def read
+    content = []
+    File.foreach(@filename) do |line|
+      content << line
+    end
+    content
+  end
+
+end
+
 class AccessParser
 
   attr_accessor :uri
@@ -9,10 +25,11 @@ class AccessParser
   REGEX_MATCH_QUOTES = /['"]+/
 
   Stats = Struct.new(:uri, :stats)
-  Stat = Struct.new(:access_datetime, :type, :info, :request, :uri, :domain,
-                                      :ip, :dyno, :connect, :service, :bytes)
+  Stat = Struct.new(:access_datetime, :type, :info, :method, :uri, :host,
+                           :ip, :dyno, :connect, :service, :status, :bytes)
 
-  def initialize
+  def initialize(endpoints)
+    @endpoints = endpoints
     @parsed_data = []
   end
 
@@ -23,47 +40,79 @@ class AccessParser
 
     uri = data[4]
 
-    stat = Stat.new
-    stat.access_datetime, stat.type, stat.info = data
-
-
     stats = Stats.new
     stats.uri = uri
-    (stats.stats ||= []) << stat
-    @parsed_data << stats
+    (stats.stats ||= []) << assign_stat(data)
+    stats
 
+  end
+
+  private
+
+  def assign_stat(data)
+    stat = Stat.new
+
+    stat.access_datetime = data[0]
+    stat.type = data[1]
+    stat.info = data[2]
+    stat.method = data[3]
+    stat.host = data[5]
+    stat.ip = data[6]
+    stat.dyno = data[7]
+    stat.connect = data[8]
+    stat.service = data[9]
+    stat.status = data[10]
+    stat.bytes = data[11]
+
+    stat
+  end
+
+
+
+end
+
+class AccessConsoleWriter
+
+  def write(data)
+    data.each do |d|
+      puts d.stats[0].ip
+    end
   end
 
 end
 
+require 'forwardable'
 
 class LogStat
+  extend Forwardable
 
-  def initialize(parser)
+  def_delegators :@reader, :read
+  def_delegators :@parser, :parse
+
+  def initialize(reader, parser, writer)
+    @reader = reader
     @parser = parser
-  end
-
-  #@todo: delegate this
-  def parse(line)
-    @parser.parse(line)
+    @writer = writer
   end
 
   def output
+    data = read.map { |line| parse(line) }
+    @writer.write data
   end
+
 end
 
-log = []
-log << '012-02-07T09:43:06.123456+00:00 heroku[router]: at=info method=GET path="/stylesheets/dev-center/library.css" host=devcenter.heroku.com fwd="204.204.204.204" dyno=web.5 connect=1ms service=18ms status=200 bytes=13'
-log << '012-02-07T09:43:06.123456+00:00 heroku[router]: at=info method=GET path="/stylesheets/dev-center/library.css" host=devcenter.heroku.com fwd="204.204.204.204" dyno=web.5 connect=1ms service=18ms status=200 bytes=13'
-log << '012-02-07T09:43:06.123456+00:00 heroku[router]: at=info method=GET path="/stylesheets/dev-center/library.css" host=devcenter.heroku.com fwd="204.204.204.204" dyno=web.5 connect=1ms service=18ms status=200 bytes=13'
-log << '012-02-07T09:43:06.123456+00:00 heroku[router]: at=info method=GET path="/stylesheets/dev-center/library.css" host=devcenter.heroku.com fwd="204.204.204.204" dyno=web.5 connect=1ms service=18ms status=200 bytes=13'
+endpoints = %w(
+GET /api/users/{user_id}/count_pending_messages
+GET /api/users/{user_id}/get_messages
+GET /api/users/{user_id}/get_friends_progress
+GET /api/users/{user_id}/get_friends_score
+POST /api/users/{user_id}
+GET /api/users/{user_id}
+)
 
-parser = AccessParser.new
-has = LogStat.new(parser)
+reader = FileReader.new('/home/dan/Downloads/sample.log')
+parser = AccessParser.new(endpoints)
+writer = AccessConsoleWriter.new
+LogStat.new(reader, parser, writer).output
 
-
-log.each do |line|
-  has.parse line
-end
-
-has.output
