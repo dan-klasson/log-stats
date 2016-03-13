@@ -1,10 +1,12 @@
 #!/usr/bin/env ruby
 
-
 class FileReader
 
-  def initialize(filename)
+  Endpoint = Struct.new(:uri, :method)
+
+  def initialize(filename, endpoints = nil)
     @filename = filename
+    @endpoints = endpoints
   end
 
   def read
@@ -15,34 +17,44 @@ class FileReader
     content
   end
 
+  def endpoint
+    content = []
+    endpoint = Endpoint.new
+    File.foreach(@endpoints) do |line|
+      endpoint.method, endpoint.uri = line.split
+      content << endpoint
+    end
+    content
+  end
+
 end
 
 class AccessParser
 
-  attr_accessor :uri
-
   REGEX_MATCH_VARIABLES = /[^\s=]+=/
   REGEX_MATCH_QUOTES = /['"]+/
+  REGEX_MATCH_DIGITS = /\d+/
+  PLACEHOLDER = '{user_id}'
 
   Stats = Struct.new(:uri, :stats)
   Stat = Struct.new(:access_datetime, :type, :info, :method, :uri, :host,
                            :ip, :dyno, :connect, :service, :status, :bytes)
 
-  def initialize(endpoints)
-    @endpoints = endpoints
-    @parsed_data = []
+  def initialize
+    @content = {}
   end
 
   def parse(line)
     line = line.gsub(REGEX_MATCH_VARIABLES, '')
     line = line.gsub(REGEX_MATCH_QUOTES, '')
+    line = line.sub(REGEX_MATCH_DIGITS, PLACEHOLDER)
     data = line.split
 
-    uri = data[4]
+    assign_stat(data)
 
     stats = Stats.new
-    stats.uri = uri
-    (stats.stats ||= []) << assign_stat(data)
+    stats.uri = @stat.uri
+    (stats.stats ||= []) << @stat
     stats
 
   end
@@ -56,6 +68,7 @@ class AccessParser
     stat.type = data[1]
     stat.info = data[2]
     stat.method = data[3]
+    stat.uri = data[4]
     stat.host = data[5]
     stat.ip = data[6]
     stat.dyno = data[7]
@@ -64,10 +77,8 @@ class AccessParser
     stat.status = data[10]
     stat.bytes = data[11]
 
-    stat
+    @stat = stat
   end
-
-
 
 end
 
@@ -75,7 +86,7 @@ class AccessConsoleWriter
 
   def write(data)
     data.each do |d|
-      puts d.stats[0].ip
+      #puts d.stats[0].uri
     end
   end
 
@@ -86,33 +97,37 @@ require 'forwardable'
 class LogStat
   extend Forwardable
 
-  def_delegators :@reader, :read
+  def_delegators :@reader, :read, :endpoint
   def_delegators :@parser, :parse
 
   def initialize(reader, parser, writer)
     @reader = reader
     @parser = parser
     @writer = writer
+    process
+  end
+
+  def process
+    @data = read.map { |line| parse line }
+
+    @data.each do |d|
+      endpoint.each do |e|
+        puts d
+        if d.uri == e.uri and d.stats.method == e.method
+          puts d.uri
+        end
+      end
+    end
   end
 
   def output
-    data = read.map { |line| parse(line) }
-    @writer.write data
+    @writer.write @data
   end
 
 end
 
-endpoints = %w(
-GET /api/users/{user_id}/count_pending_messages
-GET /api/users/{user_id}/get_messages
-GET /api/users/{user_id}/get_friends_progress
-GET /api/users/{user_id}/get_friends_score
-POST /api/users/{user_id}
-GET /api/users/{user_id}
-)
-
-reader = FileReader.new('/home/dan/Downloads/sample.log')
-parser = AccessParser.new(endpoints)
+reader = FileReader.new('sample.log', 'endpoints.txt')
+parser = AccessParser.new
 writer = AccessConsoleWriter.new
 LogStat.new(reader, parser, writer).output
 
