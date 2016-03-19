@@ -2,132 +2,120 @@
 
 class FileReader
 
-  Endpoint = Struct.new(:uri, :method)
-
-  def initialize(filename, endpoints = nil)
+  def initialize(filename, start_at = nil, end_at = nil, endpoints = nil)
     @filename = filename
+    @start_at = start_at
+    @end_at = end_at
     @endpoints = endpoints
   end
 
   def read
-    content = []
-    File.foreach(@filename) do |line|
-      content << line
-    end
-    content
+    File.foreach(@filename).map { |l|
+      # saving some memory here by only loading data into memory that we need
+      unless @start_at.nil? or @end_at.nil?
+        start = l.index(@start_at)
+        finish = l.index(@end_at) - 2
+        l[start..finish]
+      else
+        l
+      end
+    }
   end
 
-  def endpoint
-    content = []
-    endpoint = Endpoint.new
-    File.foreach(@endpoints) do |line|
-      endpoint.method, endpoint.uri = line.split
-      content << endpoint
-    end
-    content
+  def endpoints
+    File.foreach(@endpoints).map { |line| line.split }
   end
 
 end
 
-class AccessParser
 
-  REGEX_MATCH_VARIABLES = /[^\s=]+=/
-  REGEX_MATCH_QUOTES = /['"]+/
+require 'forwardable'
+
+class AccessParser
+  extend Forwardable
+
+  def_delegators :@reader, :read, :endpoints
+
   REGEX_MATCH_DIGITS = /\d+/
   PLACEHOLDER = '{user_id}'
 
-  Stats = Struct.new(:uri, :stats)
-  Stat = Struct.new(:access_datetime, :type, :info, :method, :uri, :host,
-                           :ip, :dyno, :connect, :service, :status, :bytes)
+  Uris = Struct.new(:method, :uri, :stats)
+  Stats = Struct.new(:dyno, :response_time)
 
-  def initialize
-    @content = {}
+  def initialize(reader)
+    @reader = reader
   end
 
-  def parse(line)
-    line = line.gsub(REGEX_MATCH_VARIABLES, '')
-    line = line.gsub(REGEX_MATCH_QUOTES, '')
-    line = line.sub(REGEX_MATCH_DIGITS, PLACEHOLDER)
-    data = line.split
+  def parse
 
-    assign_stat(data)
+    uris = create_uris
 
-    stats = Stats.new
-    stats.uri = @stat.uri
-    (stats.stats ||= []) << @stat
-    stats
+    read.each.map { |line|
+
+      data = line_to_hash line
+
+      method = data['method']
+      uri = data['path'].sub(REGEX_MATCH_DIGITS, PLACEHOLDER)
+
+      uris.each.map { |e|
+        if uri == e.uri.to_s and method == e.method
+          (e.stats.dyno ||= []) << data['dyno']
+          response_time = data['connect'].to_i + data['service'].to_i
+          (e.stats.response_time ||= []) << response_time
+        end
+      }
+    }
+    uris
 
   end
 
   private
 
-  def assign_stat(data)
-    stat = Stat.new
+  def create_uris
+    # using structs because it's faster than hashes
+    endpoints.each.map { |e| Uris.new(*e, Stats.new) }
+  end
 
-    stat.access_datetime = data[0]
-    stat.type = data[1]
-    stat.info = data[2]
-    stat.method = data[3]
-    stat.uri = data[4]
-    stat.host = data[5]
-    stat.ip = data[6]
-    stat.dyno = data[7]
-    stat.connect = data[8]
-    stat.service = data[9]
-    stat.status = data[10]
-    stat.bytes = data[11]
-
-    @stat = stat
+  def line_to_hash(line)
+    # using split because it's faster than regex
+    Hash[line.split.each.map { |a| a.split('=') }]
   end
 
 end
 
+require 'simple_stats'
 class AccessConsoleWriter
-
-  def write(data)
-    data.each do |d|
-      #puts d.stats[0].uri
-    end
-  end
-
-end
-
-require 'forwardable'
-
-class LogStat
   extend Forwardable
 
-  def_delegators :@reader, :read, :endpoint
   def_delegators :@parser, :parse
 
-  def initialize(reader, parser, writer)
-    @reader = reader
+  def initialize(parser)
     @parser = parser
-    @writer = writer
-    process
   end
 
-  def process
-    @data = read.map { |line| parse line }
-
-    @data.each do |d|
-      endpoint.each do |e|
-        puts d
-        if d.uri == e.uri and d.stats.method == e.method
-          puts d.uri
-        end
+  def call
+    parse.each do |d|
+      puts "# #{d.method} #{d.uri}"
+      puts "# " + "-" * (d.uri.length + d.method.length + 1)
+      if d.stats.dyno.nil?
+        puts "# Calls: 0"
+      else
+        puts "# Calls: #{d.stats.dyno.count}"
+        puts "# Mean: #{d.stats.response_time.mean.round(2)}"
+        puts "# Median: #{d.stats.response_time.median.round(2)}"
+        puts "# Mode: #{d.stats.response_time.modes[0]}"
+        puts "# Dyno: #{d.stats.dyno.modes[0]}"
       end
-    end
-  end
+      puts ""
 
-  def output
-    @writer.write @data
+    end
   end
 
 end
 
-reader = FileReader.new('sample.log', 'endpoints.txt')
-parser = AccessParser.new
-writer = AccessConsoleWriter.new
-LogStat.new(reader, parser, writer).output
+
+reader = FileReader.new('sample.log', 'method=', 'status=', 'endpoints.txt')
+parser = AccessParser.new(reader)
+AccessConsoleWriter.new(parser).call
+
 
