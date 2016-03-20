@@ -6,3 +6,6 @@ It’s a Heroku access log parser, but can be extended to use for other logs as 
 
 I tried to adhere to best practices such as not violating the Single Responsibility Principle and the Law of Demeter.
 
+To run the program:
+
+    ./main.rb
