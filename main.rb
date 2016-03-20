@@ -48,7 +48,7 @@ class AccessParser
 
   def parse
 
-    uris = create_uris
+    uris = endpoints_to_uris
 
     read.each.map { |line|
 
@@ -71,7 +71,7 @@ class AccessParser
 
   private
 
-  def create_uris
+  def endpoints_to_uris
     # using structs because it's faster than hashes
     endpoints.each.map { |e| Uris.new(*e, Stats.new) }
   end
@@ -83,7 +83,30 @@ class AccessParser
 
 end
 
-require 'simple_stats'
+module Enumerable
+
+  def sum
+    inject(0.0) { |result, el| result + el }
+  end
+
+  def mean
+    sum / size
+  end
+
+  def median
+    len = sort.length
+    (sort[(len - 1) / 2] + sort[len / 2]) / 2.0
+  end
+
+  def mode
+    counter = Hash.new(0)
+    entries.each.map { |i| counter[i] += 1 }
+    mode_array = []
+    counter.each.map { |k, v|  mode_array << k if v == counter.values.max }
+    mode_array.sort.first
+  end
+end
+
 class AccessConsoleWriter
   extend Forwardable
 
@@ -103,8 +126,8 @@ class AccessConsoleWriter
         puts "# Calls: #{d.stats.dyno.count}"
         puts "# Mean: #{d.stats.response_time.mean.round(2)}"
         puts "# Median: #{d.stats.response_time.median.round(2)}"
-        puts "# Mode: #{d.stats.response_time.modes[0]}"
-        puts "# Dyno: #{d.stats.dyno.modes[0]}"
+        puts "# Mode: #{d.stats.response_time.mode}"
+        puts "# Dyno: #{d.stats.dyno.mode}"
       end
       puts ""
 
